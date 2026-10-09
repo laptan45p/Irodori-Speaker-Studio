@@ -421,7 +421,7 @@ def bundle(job_id):
             path = job / name
             if path.exists():
                 z.write(path, name)
-        for folder in ["clips", "latents", "output"]:
+        for folder in ["clips", "latents", "output", "asr"]:
             for path in (job / folder).rglob("*"):
                 if path.is_file():
                     z.write(path, str(path.relative_to(job)))

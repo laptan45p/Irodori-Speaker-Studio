@@ -1,5 +1,5 @@
 {
-  "tests_passed": 51,
+  "tests_passed": 65,
   "test_environment": "Python 3.12.14 / Gradio 5.50.0 / Linux",
   "verified": [
     "sentence-priority segmentation",
@@ -43,7 +43,23 @@
     "Gradio process_api table and audio response serialization",
     "initial saved-project selection matches project ID",
     "open selected project with empty or stale ID",
-    "no saved projects starts with empty selection and ID"
+    "no saved projects starts with empty selection and ID",
+    "preserve standalone zero-duration punctuation",
+    "retain short independent sentences separated by pauses",
+    "preserve long sentences across short hesitations",
+    "synthetic acoustic boundary correction without cutting ASR word ranges",
+    "neighbor clip boundaries do not overlap",
+    "no-silence fallback to original padding",
+    "missing-punctuation long-unit sentence-ending repair",
+    "short original units preserved during sentence repair",
+    "Japanese continuation particle boundary exclusion",
+    "word-level ASR diagnostic saving and export",
+    "real uploaded 54.56-second audio: CPU int8 large-v3, one 50.98-second span becomes seven context-based spans (4.18–11.56 seconds), all recognized text preserved",
+    "short non-streaming project preparation before heavy stages",
+    "independent nonqueued timer recovery of committed rows/logs without stream completion",
+    "unchanged polling preserves unsaved table edits and clip selection",
+    "Gradio timer request serialization without audio encoding",
+    "initial saved selection does not auto-load rows with default training settings"
   ],
   "not_verified": [
     "real GPU model download and installation",
@@ -55,7 +71,8 @@
     "v4 Large GPU pause/resume integration",
     "Windows real-PC pause/resume integration",
     "bitwise GPU equality",
-    "reported empty-results issue reproduction in the user Windows browser"
+    "reported empty-results issue reproduction in the user Windows browser",
+    "real speech segmentation improvement rate"
   ],
   "upstream_commit": "89f9d8fbd4d51ea019867ee1197725ede1df13c5",
   "windows_target": "Windows x64 / Python 3.11 / CUDA 12.8",

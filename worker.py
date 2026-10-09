@@ -12,7 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 UPSTREAM = ROOT / "irodori"
 sys.path.insert(0, str(UPSTREAM))
-from segmentation import Word, padded_bounds, segment_words
+from segmentation import Word, acoustic_bounds, segment_words
 
 
 def read_json(path):
@@ -60,15 +60,18 @@ def split(job):
         if not words:
             warnings.append(f"{Path(source).name}: 発話を検出できませんでした")
             continue
+        (job / "asr").mkdir(exist_ok=True)
+        write_json(job / "asr" / f"{index:03d}.words.json", [dataclasses.asdict(w) for w in words])
         spans = segment_words(words, cfg["minimum"], cfg["maximum"])
-        bounds = padded_bounds(spans, len(audio) / 48000)
+        bounds = acoustic_bounds(spans, audio, 48000)
+        print("音声の無音区間を使って切り位置を調整しました。", flush=True)
         for span, (start, end) in zip(spans, bounds):
             clip_id = f"{index:03d}_{len(rows):05d}"
             # Durations are based on saved samples, not estimates from ASR.
             first, last = int(start * 48000), min(len(audio), int(end * 48000))
             sf.write(job / "clips" / f"{clip_id}.wav", audio[first:last], 48000, subtype="PCM_24")
             duration = (last - first) / 48000
-            notes = []
+            notes = [span.note] if span.note else []
             if duration < cfg["minimum"] or duration > cfg["maximum"]:
                 notes.append("文脈優先・目安の秒数外")
             if span.confidence < 0.75:

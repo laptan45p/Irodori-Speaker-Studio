@@ -1,0 +1,28 @@
+# Local recordings, generated training material and model outputs
+/projects/
+/models/
+/downloads/
+*.safetensors
+*.pt
+*.pth
+*.wav
+*.mp3
+*.flac
+*.m4a
+*.ogg
+*.webm
+*.aac
+*.zip
+
+# Local environments and credentials
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+.cache/
+*.log

@@ -43,10 +43,20 @@ def settings(
     )
 
 
-def start(files, mode, *args):
+def prepare_start(files, *args):
+    """Commit the project identity in a short response before heavy work."""
     job_id = engine.create_job(files, settings(*args))
     engine.CANCELLED.discard(job_id)
-    yield job_id, "処理を開始します。", [], gr.update(choices=[], value=None), None
+    return job_id, "処理を開始します。", [], gr.update(choices=[], value=None), None
+
+
+def start(files, mode, *args):
+    initial = prepare_start(files, *args)
+    yield initial
+    yield from run_prepared(initial[0], mode)
+
+
+def run_prepared(job_id, mode):
     try:
         for log in engine.run_stage(job_id, "split"):
             yield job_id, log, gr.skip(), gr.skip(), gr.skip()
@@ -73,6 +83,41 @@ def start(files, mode, *args):
             yield job_id, log + "\n完了: " + str(final), gr.skip(), gr.skip(), engine.bundle(job_id)
     except Exception as exc:
         yield job_id, str(exc), gr.skip(), gr.skip(), gr.skip()
+
+
+def run_prepared_ui(job_id, mode):
+    # Table/clip updates use independent short requests, never stream diffs.
+    for _, log, _, _, download in run_prepared(job_id, mode):
+        yield log, download
+
+
+def poll_results(job_id, rendered):
+    """Recover committed results even when streaming/completion delivery stalls."""
+    if not job_id:
+        return (gr.skip(),) * 5
+    try:
+        job = engine.resolve_job(job_id)
+        rendered = rendered or {}
+        rows_path, log_path = job / "rows.json", job / "run.log"
+        def stamp(path):
+            try:
+                stat = path.stat()
+                return [job_id, stat.st_mtime_ns, stat.st_size]
+            except FileNotFoundError:
+                return [job_id, None, 0]
+        rows_stamp, log_stamp = stamp(rows_path), stamp(log_path)
+        rows, clip, projects, log = (gr.skip(),) * 4
+        if rows_stamp != rendered.get("rows"):
+            rows = engine.table(job_id) if rows_path.is_file() else []
+            choices = [row[1] for row in rows]
+            clip = gr.update(choices=choices, value=choices[0] if choices else None)
+            projects = gr.update(choices=engine.project_choices(), value=job_id)
+        if log_stamp != rendered.get("log") and log_path.is_file():
+            log = engine.tail(log_path)
+        return rows, clip, log, projects, {"rows": rows_stamp, "log": log_stamp}
+    except Exception as exc:
+        # Keep the old signature so a temporarily unreadable file is retried.
+        return gr.skip(), gr.skip(), str(exc), gr.skip(), gr.skip()
 
 
 def train_existing(job_id, values, *args):
@@ -303,13 +348,27 @@ def build():
         refresh_projects.click(
             lambda: gr.update(choices=engine.project_choices()), None, saved_project
         )
-        started = begin.click(
-            start,
-            [files, mode] + config_inputs,
+        # Opening a saved project loads its settings as well as its table.
+        # Merely selecting the initial dropdown must not load rows with default
+        # training settings. New projects get a different ID and are polled.
+        initial_rendered = poll_results(initial_project, {})[-1] if initial_project else {}
+        rendered = gr.State(initial_rendered if isinstance(initial_rendered, dict) else {})
+        result_timer = gr.Timer(2.0)
+        prepared = begin.click(
+            prepare_start,
+            [files] + config_inputs,
             [job_id, logs, table, clip, download],
             concurrency_id="work",
             concurrency_limit=1,
             show_progress="minimal",
+        )
+        started = prepared.success(
+            run_prepared_ui, [job_id, mode], [logs, download],
+            concurrency_id="work", concurrency_limit=1, show_progress="hidden",
+        )
+        result_timer.tick(
+            poll_results, [job_id, rendered], [table, clip, logs, saved_project, rendered],
+            queue=False, show_progress="hidden",
         )
         started.then(
             refresh_results, job_id, [table, clip, audio, logs, saved_project],
@@ -338,7 +397,7 @@ def build():
             rename, [job_id, project_name], [project_name, saved_project, logs],
             concurrency_id="work",
         )
-        clip.change(preview, [job_id, clip], audio)
+        clip.change(preview, [job_id, clip], audio, queue=False, show_progress="hidden")
         listen.click(preview, [job_id, clip], audio)
         export_button.click(engine.bundle, job_id, download, concurrency_id="work")
         pause_button.click(engine.pause, job_id, logs, queue=False)

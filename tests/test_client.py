@@ -239,6 +239,8 @@ def test_multifile_split_audio_pipeline(tmp_path, monkeypatch):
     worker.split(job)
     rows = worker.read_json(job / "rows.json")
     assert len(rows) == 30
+    assert len(worker.read_json(job / "asr/000.words.json")) == 30
+    assert len(worker.read_json(job / "asr/001.words.json")) == 30
     assert len({r["id"] for r in rows}) == 30
     assert {r["source"] for r in rows} == {0, 1}
     assert all(5 <= r["duration"] <= 10 for r in rows)
@@ -403,12 +405,53 @@ def test_completion_has_separate_result_refresh_event():
     demo = app.build()
     cfg = demo.get_config_file()
     component_by_id = {item['id']: item for item in cfg['components']}
-    start_event = next(d for d in cfg['dependencies'] if d['api_name'] == 'start')
+    prepare_event = next(d for d in cfg['dependencies'] if d['api_name'] == 'prepare_start')
+    assert prepare_event['types']['generator'] is False
+    start_event = next(d for d in cfg['dependencies'] if d['api_name'] == 'run_prepared_ui')
+    assert start_event['trigger_after'] == prepare_event['id']
     chained = [d for d in cfg['dependencies'] if d['trigger_after'] == start_event['id']]
     assert len(chained) == 1
     assert chained[0]['queue'] is False
     outputs = [component_by_id[i]['type'] for i in chained[0]['outputs']]
     assert outputs == ['dataframe', 'dropdown', 'audio', 'textbox', 'dropdown']
+
+
+def test_timer_recovers_materials_without_consuming_worker_response(job):
+    import app
+    job_id, folder = job
+    rows_json = (folder / 'rows.json').read_bytes()
+    (folder / 'rows.json').unlink()
+    (folder / 'run.log').write_text('文字起こし中', encoding='utf-8')
+    pending = app.poll_results(job_id, {})
+    assert pending[0] == [] and pending[2] == '文字起こし中'
+    # Simulate a worker committing rows without any final stream response.
+    (folder / 'rows.json').write_bytes(rows_json)
+    (folder / 'run.log').write_text('分割完了', encoding='utf-8')
+    ready = app.poll_results(job_id, pending[-1])
+    assert ready[0] == engine.table(job_id)
+    assert ready[1]['value'] == '000_00000'
+    assert ready[2] == '分割完了'
+    # No further disk change: preserve edits and selected clip in the browser.
+    unchanged = app.poll_results(job_id, ready[-1])
+    assert all(value == app.gr.skip() for value in unchanged[:4])
+
+
+def test_poll_gradio_serializes_nonqueued_rows_without_audio(job):
+    import asyncio
+    import app
+    job_id, folder = job
+    # Build the page before the new project's worker commits its materials.
+    committed = (folder / 'rows.json').read_bytes()
+    (folder / 'rows.json').unlink()
+    demo = app.build()
+    (folder / 'rows.json').write_bytes(committed)
+    index = next(i for i, fn in demo.fns.items() if fn.fn is app.poll_results)
+    cfg = demo.get_config_file()
+    event = next(d for d in cfg['dependencies'] if d['api_name'] == 'poll_results')
+    assert event['queue'] is False and event['show_progress'] == 'hidden'
+    result = asyncio.run(demo.process_api(index, [job_id, None]))
+    assert result['data'][0]['data'] == engine.table(job_id)
+    assert result['data'][1]['value'] == '000_00000'
 
 
 def test_result_refresh_gradio_serializes_table_and_audio(job):
