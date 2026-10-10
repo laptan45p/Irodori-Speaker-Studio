@@ -1,5 +1,5 @@
 {
-  "tests_passed": 83,
+  "tests_passed": 91,
   "test_environment": "Python 3.12.14 / Gradio 5.50.0 / Linux",
   "verified": [
     "sentence-priority segmentation",
@@ -80,7 +80,16 @@
     "HF token and exception details never included in status or terminal output",
     "gated-repository error chain yields login guidance; unrelated errors keep traceback",
     "Gradio process_api accepts selected clip while server choices are empty",
-    "stale clip selection and missing rows during project switch clear preview/waveform safely"
+    "stale clip selection and missing rows during project switch clear preview/waveform safely",
+    "synthetic half-second late vowel tail is retained with trailing silence",
+    "brief inter-syllable quiet dip and soft fading vowel do not truncate ending",
+    "extended endings retain neighbor/source limits",
+    "clearly silent leading ASR timestamp moves near onset with pre-roll",
+    "soft onset and long uncertain leading silence retain original start",
+    "previous/next clip navigation follows visible order including unchecked clips",
+    "navigation retains unsaved table edits and committed rows",
+    "navigation clamps ends and handles stale selection/empty project",
+    "Gradio navigation serializes selection, clip audio, waveform and source audio together"
   ],
   "not_verified": [
     "real GPU model download and installation",
@@ -96,13 +105,15 @@
     "real speech segmentation improvement rate",
     "waveform interaction in real Windows browser",
     "actual training resume across different PCs or GPUs",
-    "live authenticated Hugging Face access check on Windows"
+    "live authenticated Hugging Face access check on Windows",
+    "boundary improvement on actual audio shown in screenshots (audio not supplied)"
   ],
   "upstream_commit": "89f9d8fbd4d51ea019867ee1197725ede1df13c5",
   "windows_target": "Windows x64 / Python 3.11 / CUDA 12.8",
   "windows_runtime_tested": false,
   "previous_full_suite_tests_passed": 65,
   "current_test_scope": [
+    "tests/test_clip_navigation.py",
     "tests/test_hf_access.py",
     "tests/test_portability.py",
     "tests/test_manual_split.py",

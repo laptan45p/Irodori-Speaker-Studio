@@ -138,11 +138,12 @@ def padded_bounds(spans, duration, padding=0.12):
     return result
 
 
-def acoustic_bounds(spans, audio, sample_rate, padding=0.12, search=0.4):
-    """Move boundaries toward nearby quiet frames without trimming ASR words.
+def acoustic_bounds(spans, audio, sample_rate, padding=0.12, search=0.4, end_search=0.8):
+    """Refine ASR boundaries using nearby quiet frames.
 
     RMS is a conservative boundary aid, not a semantic or speech detector.
-    Never search inside a word or beyond the midpoint to adjacent material.
+    Keep ASR ranges except a clearly silent leading region. Never move beyond
+    the midpoint to adjacent material when extending a clip.
     Fall back to padded bounds when no quiet frame can be identified.
     """
     import numpy as np
@@ -162,32 +163,47 @@ def acoustic_bounds(spans, audio, sample_rate, padding=0.12, search=0.4):
     # Require at least 30 ms of quiet to avoid zero crossings and tiny dips.
     level = float(np.percentile(rms, 90))
     threshold = max(1e-6, level * 0.08)
-    quiet = rms <= threshold
-    runs = []
-    start = None
-    for i, is_quiet in enumerate(quiet):
-        if is_quiet and start is None:
-            start = i
-        if start is not None and (not is_quiet or i == len(quiet) - 1):
-            end = i if not is_quiet else i + 1
-            if end - start >= 3:
-                runs.append((start * frame / sample_rate,
-                             min(duration, end * frame / sample_rate)))
-            start = None
+    def quiet_runs(floor, minimum):
+        quiet = rms <= floor
+        runs, start = [], None
+        for i, is_quiet in enumerate(quiet):
+            if is_quiet and start is None:
+                start = i
+            if start is not None and (not is_quiet or i == len(quiet) - 1):
+                end = i if not is_quiet else i + 1
+                if (end - start) * frame / sample_rate >= minimum:
+                    runs.append((start * frame / sample_rate,
+                                 min(duration, end * frame / sample_rate)))
+                start = None
+        return runs
 
-    def quiet_point(lo, hi, preferred):
+    runs = quiet_runs(threshold, 0.03)
+    # Fading vowels and short inter-syllable dips are not reliable word ends.
+    # End boundaries need a quieter, sustained gap and retain trailing padding.
+    end_runs = quiet_runs(max(1e-6, level * 0.03), 0.10)
+
+    def quiet_point(lo, hi, preferred, candidates_from, trailing=False):
         candidates = []
-        for left, right in runs:
+        for left, right in candidates_from:
             left, right = max(lo, left), min(hi, right)
             if right - left >= 0.02:
-                candidates.append(min(max(preferred, left + 0.01), right - 0.01))
+                target = left + padding if trailing else preferred
+                candidates.append(min(max(target, left + 0.01), right - 0.01))
         return min(candidates, key=lambda t: abs(t - preferred)) if candidates else None
 
     result = []
     for i, (span, (start, end)) in enumerate(zip(spans, bounds)):
         left_limit = (spans[i - 1].end + span.start) / 2 if i else 0
         right_limit = (span.end + spans[i + 1].start) / 2 if i + 1 < len(spans) else duration
-        left = quiet_point(max(left_limit, span.start - search), span.start, start)
-        right = quiet_point(span.end, min(right_limit, span.end + search), end)
+        left = quiet_point(max(left_limit, span.start - search), span.start, start, runs)
+        right = quiet_point(span.end, min(right_limit, span.end + end_search), end, end_runs, True)
+        # ASR may timestamp a word well before its audible onset. Move forward
+        # only through a continuous, very quiet run; preserve 120 ms pre-roll.
+        # A faint onset above the lower end threshold prevents this adjustment.
+        for quiet_start, quiet_end in end_runs:
+            if (quiet_start <= span.start and quiet_end - span.start >= 0.15
+                    and quiet_end <= min(span.end, span.start + 0.8)):
+                left = max(start, quiet_end - padding)
+                break
         result.append((start if left is None else left, end if right is None else right))
     return result

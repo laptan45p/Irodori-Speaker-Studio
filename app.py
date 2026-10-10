@@ -269,6 +269,33 @@ def preview(job_id, clip_id):
     return str(job / "clips" / (clip_id + ".wav"))
 
 
+def navigate_clip(job_id, clip_id, values, scope, direction):
+    if not job_id:
+        return gr.update(choices=[], value=None), None, None, {}, None
+    job = engine.resolve_job(job_id)
+    if not (job / "rows.json").is_file():
+        return gr.update(choices=[], value=None), None, None, {}, None
+    committed = engine.table(job_id)
+    valid = {row[1] for row in committed}
+    # Follow visible order, retain unchecked material and all unsaved edits.
+    rows = values or committed
+    choices = [row[1] for row in rows if row[1] in valid]
+    if not choices:
+        return gr.update(choices=[], value=None), None, None, {}, None
+    index = choices.index(clip_id) if clip_id in choices else None
+    target = choices[0] if index is None else choices[max(0, min(len(choices) - 1, index + direction))]
+    return (gr.update(choices=choices, value=target), preview(job_id, target),
+            *render_waveform(job_id, target, rows, scope))
+
+
+def previous_clip(job_id, clip_id, values, scope):
+    return navigate_clip(job_id, clip_id, values, scope, -1)
+
+
+def next_clip(job_id, clip_id, values, scope):
+    return navigate_clip(job_id, clip_id, values, scope, 1)
+
+
 def load(job_id):
     try:
         rows = engine.table(job_id)
@@ -438,7 +465,11 @@ def build():
         with gr.Row():
             # Dynamic choices can lag behind browser values during independent
             # timer/project updates. Validate IDs against the project in handlers.
-            clip = gr.Dropdown(label="試聴するクリップ", allow_custom_value=True)
+            with gr.Column():
+                clip = gr.Dropdown(label="試聴するクリップ", allow_custom_value=True)
+                with gr.Row():
+                    previous_button = gr.Button("◀ 前のクリップ", size="sm")
+                    next_button = gr.Button("次のクリップ ▶", size="sm")
             audio = gr.Audio(label="分割音声", type="filepath")
             listen = gr.Button("試聴を更新")
         with gr.Accordion("元音声の波形で切り位置を指定", open=True):
@@ -556,6 +587,10 @@ def build():
             queue=False, show_progress="hidden",
         )
         listen.click(preview, [job_id, clip], audio)
+        for button, handler in [(previous_button, previous_clip), (next_button, next_clip)]:
+            button.click(handler, [job_id, clip, table, wave_scope],
+                         [clip, audio, wave_image, wave_info, source_audio],
+                         queue=False, show_progress="hidden")
         export_button.click(engine.bundle, job_id, download, concurrency_id="work")
         transfer_export.click(engine.export_project, job_id, download, concurrency_id="work")
         transfer_import.click(import_transfer, transfer_file,
