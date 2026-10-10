@@ -214,8 +214,12 @@ def render_waveform(job_id, clip_id, values, scope, marker=None):
         return None, {}, None
     try:
         job = engine.resolve_job(job_id)
-        original = next(row for row in engine.read(job / "rows.json") if row["id"] == clip_id)
-        edited = next(row for row in values if row[1] == clip_id)
+        if not (job / "rows.json").is_file():
+            return None, {}, None
+        original = next((row for row in engine.read(job / "rows.json") if row["id"] == clip_id), None)
+        edited = next((row for row in (values or []) if row[1] == clip_id), None)
+        if original is None or edited is None:
+            return None, {}, None
         source = job / "sources" / f'{original["source"]:03d}.wav'
         audio, rate = sf.read(source)
         image, info = draw_waveform(audio, rate, float(edited[2]), float(edited[3]), scope, marker)
@@ -252,12 +256,16 @@ def choose_wave_position(job_id, clip_id, values, kind, info, evt: gr.SelectData
 
 
 def preview(job_id, clip_id):
-    if not clip_id:
+    if not job_id or not clip_id:
         return None
     job = engine.resolve_job(job_id)
+    if not (job / "rows.json").is_file():
+        return None
     ids = {r["id"] for r in engine.read(job / "rows.json")}
     if clip_id not in ids:
-        raise gr.Error("クリップIDが不正です。")
+        # A project switch may still deliver the previous clip's change event.
+        # Only committed IDs are converted to filesystem paths.
+        return None
     return str(job / "clips" / (clip_id + ".wav"))
 
 
@@ -428,7 +436,9 @@ def build():
             wrap=True,
         )
         with gr.Row():
-            clip = gr.Dropdown(label="試聴するクリップ")
+            # Dynamic choices can lag behind browser values during independent
+            # timer/project updates. Validate IDs against the project in handlers.
+            clip = gr.Dropdown(label="試聴するクリップ", allow_custom_value=True)
             audio = gr.Audio(label="分割音声", type="filepath")
             listen = gr.Button("試聴を更新")
         with gr.Accordion("元音声の波形で切り位置を指定", open=True):

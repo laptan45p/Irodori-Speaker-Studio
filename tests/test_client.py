@@ -454,6 +454,35 @@ def test_poll_gradio_serializes_nonqueued_rows_without_audio(job):
     assert result['data'][1]['value'] == '000_00000'
 
 
+def test_poll_accepts_browser_selection_when_server_choices_are_empty(job):
+    import asyncio
+    import app
+    job_id, folder = job
+    committed = (folder / 'rows.json').read_bytes()
+    (folder / 'rows.json').unlink()
+    demo = app.build()
+    (folder / 'rows.json').write_bytes(committed)
+    index = next(i for i, fn in demo.fns.items() if fn.fn is app.poll_results)
+    dropdown = demo.fns[index].inputs[2]
+    assert dropdown.choices == []
+    # The browser already selected the first clip while server choices lag.
+    for selection in ['000_00000', 'previous_project_clip']:
+        from gradio.state_holder import SessionState
+        result = asyncio.run(demo.process_api(index, [job_id, None, selection], state=SessionState(demo)))
+        assert result['data'][0]['data'] == engine.table(job_id)
+        assert result['data'][1]['value'] == '000_00000'
+
+
+def test_stale_preview_and_waveform_during_project_switch(job):
+    import app
+    job_id, folder = job
+    assert app.preview(job_id, '../outside') is None
+    assert app.render_waveform(job_id, 'previous_project_clip', [], '元音声全体') == (None, {}, None)
+    (folder / 'rows.json').unlink()
+    assert app.preview(job_id, '000_00000') is None
+    assert app.render_waveform(job_id, '000_00000', [], '元音声全体') == (None, {}, None)
+
+
 def test_result_refresh_gradio_serializes_table_and_audio(job):
     import asyncio
     import app

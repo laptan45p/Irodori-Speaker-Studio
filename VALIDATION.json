@@ -1,5 +1,5 @@
 {
-  "tests_passed": 81,
+  "tests_passed": 83,
   "test_environment": "Python 3.12.14 / Gradio 5.50.0 / Linux",
   "verified": [
     "sentence-priority segmentation",
@@ -78,7 +78,9 @@
     "active export and ZIP path traversal rejection",
     "startup HF access status: missing credential, authorized, denied, network failure (mocked)",
     "HF token and exception details never included in status or terminal output",
-    "gated-repository error chain yields login guidance; unrelated errors keep traceback"
+    "gated-repository error chain yields login guidance; unrelated errors keep traceback",
+    "Gradio process_api accepts selected clip while server choices are empty",
+    "stale clip selection and missing rows during project switch clear preview/waveform safely"
   ],
   "not_verified": [
     "real GPU model download and installation",
