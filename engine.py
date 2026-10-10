@@ -10,6 +10,8 @@ import time
 import uuid
 from pathlib import Path
 
+from portability import output_path
+
 ROOT = Path(__file__).resolve().parent
 JOBS = Path(os.environ.get("IRODORI_JOBS", ROOT / "projects")).resolve()
 ACTIVE = {}
@@ -71,7 +73,7 @@ def rename_project(job_id, name):
         record_path = job / "training.json"
         if record_path.exists():
             record = read(record_path)
-            output = Path(record["output_dir"])
+            output = output_path(job, record)
             old = record.get("output_prefix", "checkpoint")
             new = name or "checkpoint"
             moves = [(p, p.with_name(new + p.name[len(old):]))
@@ -88,8 +90,9 @@ def rename_project(job_id, name):
 
 
 def final_embedding(job_id):
-    record = read(resolve_job(job_id) / "training.json")
-    return Path(record["output_dir"]) / (record.get("output_prefix", "checkpoint") +
+    job = resolve_job(job_id)
+    record = read(job / "training.json")
+    return output_path(job, record) / (record.get("output_prefix", "checkpoint") +
                                          "_final.speaker.safetensors")
 
 
@@ -326,7 +329,7 @@ def project_choices():
         description = (project_name(job) or "名称未設定") + " / " + job.name[:8]
         try:
             training = read(job / "training.json")
-            info = read(Path(training["output_dir"]) / "resume_info.json")
+            info = read(output_path(job, training) / "resume_info.json")
             description += f" / 再開状態 {info['step']}/{info['target_steps']} step"
         except (OSError, ValueError, KeyError):
             pass
@@ -454,11 +457,11 @@ def split_clip(job_id, values, clip_id, split_seconds, left_text, right_text):
         return table(job_id), new_id
 
 
-def bundle(job_id):
+def bundle(job_id, portable=False):
     import zipfile
 
     job = resolve_job(job_id)
-    target = job / "result.zip"
+    target = job / ("project-transfer.zip" if portable else "result.zip")
     with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as z:
         for name in [
             "project.json",
@@ -474,8 +477,56 @@ def bundle(job_id):
             path = job / name
             if path.exists():
                 z.write(path, name)
-        for folder in ["clips", "latents", "output", "asr"]:
+        for folder in ["clips", "latents", "output", "asr"] + (["input", "sources", "assets"] if portable else []):
             for path in (job / folder).rglob("*"):
                 if path.is_file():
                     z.write(path, str(path.relative_to(job)))
+        if portable:
+            initial = read(job / "settings.json").get("initial_embedding", "")
+            asset_name = "assets/initial.speaker.safetensors"
+            if initial and Path(initial).is_file() and asset_name not in z.namelist():
+                z.write(initial, asset_name)
     return str(target)
+
+
+def export_project(job_id):
+    with LOCK:
+        if job_id in ACTIVE:
+            raise ValueError("保存して中断または処理を終了してから移行用ZIPを作成してください。")
+        return bundle(job_id, portable=True)
+
+
+def import_project(archive):
+    import shutil
+    import tempfile
+    import zipfile
+
+    if not archive:
+        raise ValueError("移行用ZIPを選択してください。")
+    JOBS.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(archive) as z, tempfile.TemporaryDirectory(dir=JOBS) as staging:
+        names = {entry.filename for entry in z.infolist()}
+        if not {"settings.json", "rows.json"} <= names or not any(n.startswith("sources/") for n in names):
+            raise ValueError("移行用ZIPではありません。「PC移行用ZIPを取得」で書き出してください。")
+        for entry in z.infolist():
+            relative = Path(entry.filename.replace("\\", "/"))
+            if relative.is_absolute() or ".." in relative.parts or ":" in str(relative):
+                raise ValueError("ZIP内に不正なパスがあります。")
+            if entry.is_dir():
+                continue
+            target = Path(staging) / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with z.open(entry) as source, target.open("wb") as destination:
+                shutil.copyfileobj(source, destination)
+        settings = read(Path(staging) / "settings.json")
+        job_id = uuid.uuid4().hex
+        destination = JOBS / job_id
+        from portability import basename
+        settings["sources"] = [str(destination / "input" / basename(p)) for p in settings.get("sources", [])]
+        if settings.get("checkpoint") and not Path(settings["checkpoint"]).is_file():
+            settings["checkpoint"] = ""
+        if (Path(staging) / "assets/initial.speaker.safetensors").is_file():
+            settings["initial_embedding"] = str(destination / "assets/initial.speaker.safetensors")
+        write(Path(staging) / "settings.json", settings)
+        Path(staging).rename(destination)
+    return job_id

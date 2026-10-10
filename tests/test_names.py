@@ -1,7 +1,9 @@
+import sys
 from pathlib import Path
 from types import SimpleNamespace
-import sys
+
 import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import engine
 import named_trainer
@@ -54,11 +56,16 @@ def test_wrapper_names_outputs_without_touching_state(tmp_path):
 
 def test_named_resume_keeps_saved_command_and_context(tmp_path, monkeypatch):
     import worker
-    output = tmp_path / 'output'
-    output.mkdir()
+    output = tmp_path / 'output' / 'run'
+    output.mkdir(parents=True)
     (output / 'resume_state.pt').write_bytes(b'state')
-    command = ['python', '-u', str(worker.UPSTREAM / 'train.py'), '--config', 'same.yaml']
-    record = dict(output_dir=str(output), checkpoint='base', command=command,
+    checkpoint = tmp_path / 'base.safetensors'
+    checkpoint.write_bytes(b'base')
+    command = [worker.sys.executable, '-u', str(worker.UPSTREAM / 'train.py'),
+               '--config', str(tmp_path / 'train_large_speaker.yaml'),
+               '--manifest', str(tmp_path / 'manifest.jsonl'),
+               '--init-checkpoint', str(checkpoint), '--output-dir', str(output)]
+    record = dict(output_dir=str(output), checkpoint=str(checkpoint), command=command,
                   context={'same': True}, output_prefix='みあ')
     worker.write_json(tmp_path / 'training.json', record)
     monkeypatch.setattr(worker, 'training_identity', lambda *args: {'same': True})
@@ -71,4 +78,5 @@ def test_named_resume_keeps_saved_command_and_context(tmp_path, monkeypatch):
     import os
     assert os.environ['STUDIO_OUTPUT_PREFIX'] == 'みあ'
     assert calls == [command]
-    assert worker.read_json(tmp_path / 'training.json') == record
+    updated = worker.read_json(tmp_path / 'training.json')
+    assert updated == dict(record, runtime_context=record['context'])

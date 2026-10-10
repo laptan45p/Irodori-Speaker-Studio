@@ -1,5 +1,5 @@
 {
-  "tests_passed": 71,
+  "tests_passed": 81,
   "test_environment": "Python 3.12.14 / Gradio 5.50.0 / Linux",
   "verified": [
     "sentence-priority segmentation",
@@ -69,7 +69,16 @@
     "Gradio source waveform/image/audio and split response serialization",
     "save preserves pre-save clip selection and refreshes updated WAV",
     "timer preserves selected clip after committed row changes",
-    "Gradio save response keeps non-first clip and serves corrected audio"
+    "Gradio save response keeps non-first clip and serves corrected audio",
+    "portable ZIP includes source audio, clips, latents and complete resume state",
+    "transfer import creates new project ID and rebases input paths without overwriting existing projects",
+    "relocated resume command and immutable state identity (mocked trainer)",
+    "GPU/CUDA change opt-in retains model/material/config checks",
+    "initial embedding transfer and metadata-only state relocation (serialization stub)",
+    "active export and ZIP path traversal rejection",
+    "startup HF access status: missing credential, authorized, denied, network failure (mocked)",
+    "HF token and exception details never included in status or terminal output",
+    "gated-repository error chain yields login guidance; unrelated errors keep traceback"
   ],
   "not_verified": [
     "real GPU model download and installation",
@@ -83,13 +92,17 @@
     "bitwise GPU equality",
     "reported empty-results issue reproduction in the user Windows browser",
     "real speech segmentation improvement rate",
-    "waveform interaction in real Windows browser"
+    "waveform interaction in real Windows browser",
+    "actual training resume across different PCs or GPUs",
+    "live authenticated Hugging Face access check on Windows"
   ],
   "upstream_commit": "89f9d8fbd4d51ea019867ee1197725ede1df13c5",
   "windows_target": "Windows x64 / Python 3.11 / CUDA 12.8",
   "windows_runtime_tested": false,
   "previous_full_suite_tests_passed": 65,
   "current_test_scope": [
+    "tests/test_hf_access.py",
+    "tests/test_portability.py",
     "tests/test_manual_split.py",
     "tests/test_waveform.py",
     "tests/test_client.py",

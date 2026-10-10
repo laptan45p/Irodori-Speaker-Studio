@@ -3,6 +3,7 @@ import os
 
 import engine
 import gradio as gr
+from hf_access import check_access
 
 
 def settings(
@@ -145,8 +146,15 @@ def train_existing(job_id, values, *args):
         yield str(exc), gr.skip()
 
 
-def resume_training(job_id):
+def resume_training(job_id, migration_checkpoint="", allow_environment_change=False):
     try:
+        with engine.LOCK:
+            if job_id in engine.ACTIVE:
+                raise ValueError("処理を中断または終了してから再開してください。")
+            engine.write(engine.resolve_job(job_id) / "resume_request.json", {
+                "checkpoint": migration_checkpoint.strip(),
+                "allow_environment_change": bool(allow_environment_change),
+            })
         engine.CANCELLED.discard(job_id)
         for log in engine.run_stage(job_id, "resume"):
             yield log, gr.skip()
@@ -322,6 +330,14 @@ def load_selected(selected, job_id):
     return (target, *load(target))
 
 
+def import_transfer(archive):
+    try:
+        target = engine.import_project(archive)
+        return (target, *load(target), gr.update(choices=engine.project_choices(), value=target))
+    except Exception as exc:
+        raise gr.Error(str(exc))
+
+
 def build():
     with gr.Blocks(title="Irodori Speaker Studio") as demo:
         gr.Markdown(
@@ -330,6 +346,10 @@ def build():
         gr.Markdown(
             "5〜10秒は目安です。長い文や独立した短い発話も保持します。音声は同じ話者の素材をまとめてください。"
         )
+        auth_status = gr.Markdown("Hugging Faceの認証・モデルアクセスを確認中…")
+        auth_refresh = gr.Button("認証状態を再確認", size="sm")
+        demo.load(check_access, outputs=auth_status, queue=False, show_progress="hidden")
+        auth_refresh.click(check_access, outputs=auth_status, queue=False, show_progress="minimal")
         project_name = gr.Textbox(label="プロジェクト名（任意・日本語可）", placeholder="例：みあ")
         with gr.Row():
             files = gr.File(
@@ -444,6 +464,13 @@ def build():
             export_button = gr.Button("素材・途中結果をZIPで取得")
         logs = gr.Textbox(label="進捗・学習ログ", lines=14, max_lines=20, interactive=False)
         download = gr.File(label="結果ZIP（音声・文字起こし・潜在表現・学習済み埋め込み）")
+        with gr.Accordion("別PCへの移行・移行先での再開", open=False):
+            gr.Markdown("元PCで保存して中断し、移行用ZIPを取得してください。移行先では同じ版のアプリをセットアップしてZIPを読み込みます。モデルはZIPに含まれず、空欄なら必要時に取得します。PyTorchのバージョンとCUDAデバイス数は元PCと揃えてください。")
+            transfer_export = gr.Button("PC移行用ZIPを取得（元音声・素材・学習状態）")
+            transfer_file = gr.File(label="移行用ZIP", file_types=[".zip"], type="filepath")
+            transfer_import = gr.Button("移行用ZIPを読み込む")
+            migration_checkpoint = gr.Textbox(label="移行先のv4 Largeモデルのパス（任意）")
+            allow_environment_change = gr.Checkbox(label="移行先のGPU・CUDAの違いを許可して再開", value=False)
         saved_project.input(lambda value: value, saved_project, job_id, queue=False)
         refresh_projects.click(
             lambda: gr.update(choices=engine.project_choices()), None, saved_project
@@ -520,9 +547,17 @@ def build():
         )
         listen.click(preview, [job_id, clip], audio)
         export_button.click(engine.bundle, job_id, download, concurrency_id="work")
+        transfer_export.click(engine.export_project, job_id, download, concurrency_id="work")
+        transfer_import.click(import_transfer, transfer_file,
+                              [job_id, table, clip, logs] + config_inputs + [saved_project],
+                              concurrency_id="work").success(
+            refresh_results, job_id, [table, clip, audio, logs, saved_project], queue=False,
+        ).success(render_waveform, [job_id, clip, table, wave_scope],
+                  [wave_image, wave_info, source_audio], queue=False)
         pause_button.click(engine.pause, job_id, logs, queue=False)
         resume_button.click(
-            resume_training, job_id, [logs, download], concurrency_id="work", concurrency_limit=1
+            resume_training, [job_id, migration_checkpoint, allow_environment_change],
+            [logs, download], concurrency_id="work", concurrency_limit=1
         )
         stop.click(engine.cancel, job_id, logs, queue=False)
     return demo

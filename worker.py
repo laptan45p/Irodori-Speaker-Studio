@@ -272,20 +272,56 @@ def setup_resume_environment(job, output_dir, command, checkpoint):
 
 
 def resume(job):
+    from portability import output_path, resume_command, verify_context
     record = read_json(job / "training.json")
-    state = Path(record["output_dir"]) / "resume_state.pt"
+    output = output_path(job, record)
+    state = output / "resume_state.pt"
     if not state.is_file() or "command" not in record:
         raise ValueError("再開用状態がありません。この機能の導入前の学習は完全再開できません。")
-    context = training_identity(job, record["checkpoint"])
-    if context != record["context"]:
-        raise ValueError("モデル・素材・設定・GPU・コードが変更されています。完全再開できません。")
+    request = read_json(job / "resume_request.json") if (job / "resume_request.json").exists() else {}
+    checkpoint = request.get("checkpoint", "").strip() or record["checkpoint"]
+    if not Path(checkpoint).is_file():
+        if request.get("checkpoint", "").strip():
+            raise ValueError("移行先モデルのパスが見つかりません。")
+        from huggingface_hub import snapshot_download
+        print("移行先でv4 Largeを取得します（キャッシュがあれば再利用）", flush=True)
+        checkpoint = str(Path(snapshot_download("Aratako/Irodori-TTS-v4-Large",
+                        allow_patterns=["model.safetensors"])) / "model.safetensors")
+    context = training_identity(job, checkpoint)
+    changed = verify_context(record, context, request.get("allow_environment_change", False))
+    command = resume_command(record, job, checkpoint, ROOT, UPSTREAM, sys.executable)
+    if "--speaker-inversion-init-embedding" in command:
+        initial_index = command.index("--speaker-inversion-init-embedding") + 1
+        initial = command[initial_index]
+        asset = job / "assets/initial.speaker.safetensors"
+        if asset.is_file():
+            import torch
+            payload = torch.load(state, map_location="cpu", weights_only=True)
+            # Only the initialization path changes; optimizer/scheduler, tokens,
+            # RNG, loader and immutable training identity remain untouched.
+            if payload["train_config"]["speaker_inversion_init_embedding"] != str(asset):
+                payload["train_config"]["speaker_inversion_init_embedding"] = str(asset)
+                relocated = output / "resume_state_relocated.pt"
+                temporary = output / "resume_state_relocated.tmp"
+                torch.save(payload, temporary)
+                temporary.replace(relocated)
+                state = relocated
+            command[initial_index] = str(asset)
+        elif not Path(initial).is_file():
+            raise ValueError("追加学習用の初期埋め込みが見つかりません。元PCと同じパスに配置してください。")
+    if changed:
+        print("移行先のGPU・CUDAで再開します。保存された学習状態は維持しますが、以降の数値結果は変わる場合があります。", flush=True)
+    record.update(output_dir=str(output), checkpoint=checkpoint, command=command,
+                  runtime_context=context)
+    write_json(job / "training.json", record)
     (job / "pause.request.complete").unlink(missing_ok=True)
     os.environ["STUDIO_OUTPUT_PREFIX"] = record.get("output_prefix", "checkpoint")
     os.environ["STUDIO_STATE_DIR"] = record["output_dir"]
     os.environ["STUDIO_PAUSE_FILE"] = str(job / "pause.request")
-    os.environ["STUDIO_CONTEXT"] = json.dumps(context, sort_keys=True)
+    # The serialized state's original identity remains the immutable anchor.
+    os.environ["STUDIO_CONTEXT"] = json.dumps(record["context"], sort_keys=True)
     os.environ["STUDIO_RESUME_STATE"] = str(state)
-    launch_trainer(record["command"])
+    launch_trainer(command)
 
 
 def launch_trainer(command):
@@ -305,4 +341,12 @@ if __name__ == "__main__":
     parser.add_argument("stage", choices=["split", "encode", "train", "resume"])
     parser.add_argument("job")
     args = parser.parse_args()
-    globals()[args.stage](Path(args.job).resolve())
+    try:
+        globals()[args.stage](Path(args.job).resolve())
+    except Exception as error:
+        from hf_access import access_failure_help
+        help_text = access_failure_help(error)
+        if help_text is None:
+            raise
+        print(help_text, flush=True)
+        raise SystemExit(1) from None
