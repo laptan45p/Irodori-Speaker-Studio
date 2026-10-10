@@ -1,10 +1,8 @@
 import argparse
 import os
-from pathlib import Path
-
-import gradio as gr
 
 import engine
+import gradio as gr
 
 
 def settings(
@@ -91,7 +89,7 @@ def run_prepared_ui(job_id, mode):
         yield log, download
 
 
-def poll_results(job_id, rendered):
+def poll_results(job_id, rendered, selected_clip=None):
     """Recover committed results even when streaming/completion delivery stalls."""
     if not job_id:
         return (gr.skip(),) * 5
@@ -110,7 +108,8 @@ def poll_results(job_id, rendered):
         if rows_stamp != rendered.get("rows"):
             rows = engine.table(job_id) if rows_path.is_file() else []
             choices = [row[1] for row in rows]
-            clip = gr.update(choices=choices, value=choices[0] if choices else None)
+            clip = gr.update(choices=choices, value=selected_clip if selected_clip in choices
+                             else (choices[0] if choices else None))
             projects = gr.update(choices=engine.project_choices(), value=job_id)
         if log_stamp != rendered.get("log") and log_path.is_file():
             log = engine.tail(log_path)
@@ -167,6 +166,81 @@ def save(job_id, values):
         return engine.save_table(job_id, values), "修正を保存しました。試聴にも反映されます。"
     except Exception as exc:
         raise gr.Error(str(exc))
+
+
+def save_selected(job_id, values, selected_clip):
+    rows, log = save(job_id, values)
+    choices = [row[1] for row in rows]
+    selected_clip = selected_clip if selected_clip in choices else (choices[0] if choices else None)
+    return (
+        rows, log, gr.update(choices=choices, value=selected_clip),
+        preview(job_id, selected_clip), poll_results(job_id, {}, selected_clip)[-1],
+    )
+
+
+def split_material(job_id, values, clip_id, split_seconds, left_text, right_text):
+    try:
+        rows, new_id = engine.split_clip(
+            job_id, values, clip_id, split_seconds, left_text, right_text
+        )
+        # Mark the committed table as rendered to keep the timer from changing
+        # the selected second half after this response.
+        rendered = poll_results(job_id, {})[-1]
+        return (
+            rows, gr.update(choices=[row[1] for row in rows], value=new_id),
+            preview(job_id, new_id),
+            "2つの素材に分割し、表の修正も保存しました。前半・後半を試聴してください。"
+            "学習に反映する場合は「修正を保存して新しい学習」を使用してください。",
+            rendered,
+        )
+    except Exception as exc:
+        raise gr.Error(str(exc))
+
+
+def render_waveform(job_id, clip_id, values, scope, marker=None):
+    import soundfile as sf
+
+    from waveform import draw_waveform
+
+    if not job_id or not clip_id:
+        return None, {}, None
+    try:
+        job = engine.resolve_job(job_id)
+        original = next(row for row in engine.read(job / "rows.json") if row["id"] == clip_id)
+        edited = next(row for row in values if row[1] == clip_id)
+        source = job / "sources" / f'{original["source"]:03d}.wav'
+        audio, rate = sf.read(source)
+        image, info = draw_waveform(audio, rate, float(edited[2]), float(edited[3]), scope, marker)
+        info.update(job_id=job_id, clip_id=clip_id, rate=rate, scope=scope)
+        return image, info, str(source)
+    except Exception as exc:
+        raise gr.Error("波形を表示できません: " + str(exc))
+
+
+def choose_wave_position(job_id, clip_id, values, kind, info, evt: gr.SelectData):
+    from waveform import time_at_pixel
+
+    if not info or info.get("job_id") != job_id or info.get("clip_id") != clip_id:
+        raise gr.Error("対象の波形を更新してからクリックしてください。")
+    seconds = time_at_pixel(info, evt.index[0])
+    if seconds is None:
+        return (gr.skip(),) * 5
+    # Use the source sample grid, shared by preview bounds and saved clips.
+    seconds = int(seconds * info["rate"]) / info["rate"]
+    rows = [list(row) for row in values]
+    selected = next(row for row in rows if row[1] == clip_id)
+    if kind == "分割位置":
+        if not float(selected[2]) < seconds < float(selected[3]):
+            raise gr.Error("分割位置は、緑の開始線と黄色の終了線の間をクリックしてください。")
+        image, updated, _ = render_waveform(job_id, clip_id, rows, info["scope"], seconds)
+        return gr.skip(), seconds, image, updated, f"分割位置: {seconds:.3f}秒。前半・後半の文字起こしを入力して分割してください。"
+    column = 2 if kind == "開始位置" else 3
+    selected[column] = seconds
+    if not 0 <= float(selected[2]) < float(selected[3]) <= info["duration"]:
+        raise gr.Error("開始位置が終了位置より前になるようクリックしてください。")
+    selected[4] = round(float(selected[3])-float(selected[2]), 3)
+    image, updated, _ = render_waveform(job_id, clip_id, rows, info["scope"])
+    return rows, gr.skip(), image, updated, "切り位置を変更しました。「文字起こし・切り位置の修正を保存」でWAVに反映してください。"
 
 
 def preview(job_id, clip_id):
@@ -337,6 +411,32 @@ def build():
             clip = gr.Dropdown(label="試聴するクリップ")
             audio = gr.Audio(label="分割音声", type="filepath")
             listen = gr.Button("試聴を更新")
+        with gr.Accordion("元音声の波形で切り位置を指定", open=True):
+            gr.Markdown(
+                "操作を選んで波形をクリックしてください。緑線が開始、黄色線が終了です。"
+                "開始・終了の変更は下の「文字起こし・切り位置の修正を保存」で反映します。"
+                "分割位置を選んだ場合は、下の2分割機能を使ってください。"
+            )
+            with gr.Row():
+                wave_scope = gr.Radio(["素材周辺", "元音声全体"], value="素材周辺", label="波形の表示範囲")
+                wave_kind = gr.Radio(["分割位置", "開始位置", "終了位置"], value="分割位置", label="クリックで指定する位置")
+                update_wave = gr.Button("波形を更新")
+            wave_info = gr.State({})
+            wave_image = gr.Image(label="元音声の波形（クリックして指定）", type="pil",
+                                  interactive=False, show_download_button=False)
+            source_audio = gr.Audio(label="元音声の試聴（全体）", type="filepath")
+        with gr.Accordion("長い素材を2つに分割（1行追加）", open=False):
+            gr.Markdown(
+                "上の「試聴するクリップ」で分割対象を選び、波形のクリックで"
+                "分割位置を指定してください。秒数欄でも微調整できます。"
+                "前半・後半の文字起こしを入力して分割すると、表の修正も一緒に保存します。"
+                "表の＋で空行を追加する代わりに、この機能を使ってください。"
+            )
+            split_seconds = gr.Number(label="分割位置（元音声の先頭からの秒数）")
+            with gr.Row():
+                left_text = gr.Textbox(label="前半の文字起こし", lines=3)
+                right_text = gr.Textbox(label="後半の文字起こし", lines=3)
+            split_button = gr.Button("選択した素材を2つに分割して保存")
         with gr.Row():
             save_button = gr.Button("文字起こし・切り位置の修正を保存")
             train_button = gr.Button("修正を保存して新しい学習", variant="primary")
@@ -354,6 +454,11 @@ def build():
         initial_rendered = poll_results(initial_project, {})[-1] if initial_project else {}
         rendered = gr.State(initial_rendered if isinstance(initial_rendered, dict) else {})
         result_timer = gr.Timer(2.0)
+        split_button.click(
+            split_material, [job_id, table, clip, split_seconds, left_text, right_text],
+            [table, clip, audio, logs, rendered], concurrency_id="work",
+            concurrency_limit=1,
+        )
         prepared = begin.click(
             prepare_start,
             [files] + config_inputs,
@@ -367,7 +472,7 @@ def build():
             concurrency_id="work", concurrency_limit=1, show_progress="hidden",
         )
         result_timer.tick(
-            poll_results, [job_id, rendered], [table, clip, logs, saved_project, rendered],
+            poll_results, [job_id, rendered, clip], [table, clip, logs, saved_project, rendered],
             queue=False, show_progress="hidden",
         )
         started.then(
@@ -381,13 +486,20 @@ def build():
             concurrency_id="work",
             concurrency_limit=1,
         )
-        save_button.click(save, [job_id, table], [table, logs], concurrency_id="work")
+        save_button.click(save_selected, [job_id, table, clip],
+                          [table, logs, clip, audio, rendered], concurrency_id="work").success(
+            render_waveform, [job_id, clip, table, wave_scope],
+            [wave_image, wave_info, source_audio], queue=False, show_progress="hidden",
+        )
         reload_button.click(
             load_selected, [saved_project, job_id], [job_id, table, clip, logs] + config_inputs,
             concurrency_id="work"
         ).then(
             refresh_results, job_id, [table, clip, audio, logs, saved_project],
             queue=False, show_progress="minimal",
+        ).success(
+            render_waveform, [job_id, clip, table, wave_scope],
+            [wave_image, wave_info, source_audio], queue=False, show_progress="hidden",
         )
         refresh_results_button.click(
             refresh_results, job_id, [table, clip, audio, logs, saved_project],
@@ -398,6 +510,14 @@ def build():
             concurrency_id="work",
         )
         clip.change(preview, [job_id, clip], audio, queue=False, show_progress="hidden")
+        for trigger in [clip.change, wave_scope.change, update_wave.click]:
+            trigger(render_waveform, [job_id, clip, table, wave_scope],
+                    [wave_image, wave_info, source_audio], queue=False, show_progress="hidden")
+        wave_image.select(
+            choose_wave_position, [job_id, clip, table, wave_kind, wave_info],
+            [table, split_seconds, wave_image, wave_info, logs],
+            queue=False, show_progress="hidden",
+        )
         listen.click(preview, [job_id, clip], audio)
         export_button.click(engine.bundle, job_id, download, concurrency_id="work")
         pause_button.click(engine.pause, job_id, logs, queue=False)

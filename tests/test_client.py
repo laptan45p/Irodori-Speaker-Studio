@@ -449,7 +449,7 @@ def test_poll_gradio_serializes_nonqueued_rows_without_audio(job):
     cfg = demo.get_config_file()
     event = next(d for d in cfg['dependencies'] if d['api_name'] == 'poll_results')
     assert event['queue'] is False and event['show_progress'] == 'hidden'
-    result = asyncio.run(demo.process_api(index, [job_id, None]))
+    result = asyncio.run(demo.process_api(index, [job_id, None, None]))
     assert result['data'][0]['data'] == engine.table(job_id)
     assert result['data'][1]['value'] == '000_00000'
 

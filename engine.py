@@ -344,7 +344,7 @@ def table(job_id):
     ]
 
 
-def save_table(job_id, values):
+def _prepare_table(job_id, values):
     import soundfile as sf
 
     job = resolve_job(job_id)
@@ -356,7 +356,8 @@ def save_table(job_id, values):
         use, clip_id, start, end, _, text, note = value
         if clip_id not in originals or clip_id in seen:
             raise ValueError(
-                "IDの変更・重複はできません。除外する場合は「使用」をOFFにしてください。"
+                "IDの変更・重複や空行の追加はできません。行を追加して分割する場合は"
+                "「長い素材を2つに分割」を使用してください。除外する場合は「使用」をOFFにしてください。"
             )
         seen.add(clip_id)
         row = dict(originals[clip_id])
@@ -388,17 +389,69 @@ def save_table(job_id, values):
         rows.append(row)
     if seen != set(originals):
         raise ValueError("行を削除せず、使用をOFFにして除外してください。")
+    return job, rows, cache
+
+
+def _commit_rows(job, rows, cache):
+    import tempfile
+
+    import soundfile as sf
+
     # Validate all rows before replacing any clip.
-    for row in rows:
-        audio, sr = cache[row["source"]]
-        sf.write(
-            job / "clips" / (row["id"] + ".wav"),
-            audio[round(row["start"] * sr) : round(row["end"] * sr)],
-            sr,
-            subtype="PCM_24",
-        )
+    with tempfile.TemporaryDirectory(dir=job / "clips") as staging:
+        for row in rows:
+            audio, sr = cache[row["source"]]
+            sf.write(
+                Path(staging) / (row["id"] + ".wav"),
+                audio[round(row["start"] * sr) : round(row["end"] * sr)],
+                sr,
+                subtype="PCM_24",
+            )
+        for row in rows:
+            (Path(staging) / (row["id"] + ".wav")).replace(
+                job / "clips" / (row["id"] + ".wav")
+            )
     write(job / "rows.json", rows)
+
+
+def save_table(job_id, values):
+    job, rows, cache = _prepare_table(job_id, values)
+    _commit_rows(job, rows, cache)
     return table(job_id)
+
+
+def split_clip(job_id, values, clip_id, split_seconds, left_text, right_text):
+    """Split edited material at one sample boundary, preserving its source."""
+    with LOCK:
+        if job_id in ACTIVE:
+            raise ValueError("処理を中断または終了してから素材を分割してください。")
+        job, rows, cache = _prepare_table(job_id, values)
+        index = next((i for i, row in enumerate(rows) if row["id"] == clip_id), None)
+        if index is None:
+            raise ValueError("分割するクリップを選択してください。")
+        left_text, right_text = str(left_text or "").strip(), str(right_text or "").strip()
+        if not left_text or not right_text:
+            raise ValueError("分割後の前半・後半の文字起こしを両方入力してください。")
+        row = rows[index]
+        _, sr = cache[row["source"]]
+        split_seconds = float(split_seconds)
+        if not math.isfinite(split_seconds):
+            raise ValueError("分割位置には有効な秒数を入力してください。")
+        cut = int(split_seconds * sr)
+        first, last = round(row["start"] * sr), round(row["end"] * sr)
+        if not first < cut < last:
+            raise ValueError("分割位置は対象素材の開始秒と終了秒の間にしてください。")
+        boundary = cut / sr
+        new_id = f'{row["source"]:03d}_{uuid.uuid4().hex}'
+        while any(item["id"] == new_id for item in rows):
+            new_id = f'{row["source"]:03d}_{uuid.uuid4().hex}'
+        note = (row["note"] + " / 手動分割").strip(" /")
+        left = dict(row, end=boundary, duration=boundary-row["start"], text=left_text, note=note)
+        right = dict(row, id=new_id, start=boundary, duration=row["end"]-boundary,
+                     text=right_text, note=note)
+        rows[index:index + 1] = [left, right]
+        _commit_rows(job, rows, cache)
+        return table(job_id), new_id
 
 
 def bundle(job_id):

@@ -1,5 +1,5 @@
 {
-  "tests_passed": 65,
+  "tests_passed": 71,
   "test_environment": "Python 3.12.14 / Gradio 5.50.0 / Linux",
   "verified": [
     "sentence-priority segmentation",
@@ -59,7 +59,17 @@
     "independent nonqueued timer recovery of committed rows/logs without stream completion",
     "unchanged polling preserves unsaved table edits and clip selection",
     "Gradio timer request serialization without audio encoding",
-    "initial saved selection does not auto-load rows with default training settings"
+    "initial saved selection does not auto-load rows with default training settings",
+    "manual split has sample-exact coverage without gap or duplication",
+    "manual split preserves other unsaved row edits, use flag, source and confidence",
+    "invalid split leaves rows and WAV files unchanged",
+    "new split rows support save, reload, repeated split and ZIP export",
+    "source waveform full/zoom coordinate mapping and stale-selection rejection",
+    "waveform clicks change table bounds without changing WAV until save",
+    "Gradio source waveform/image/audio and split response serialization",
+    "save preserves pre-save clip selection and refreshes updated WAV",
+    "timer preserves selected clip after committed row changes",
+    "Gradio save response keeps non-first clip and serves corrected audio"
   ],
   "not_verified": [
     "real GPU model download and installation",
@@ -72,9 +82,22 @@
     "Windows real-PC pause/resume integration",
     "bitwise GPU equality",
     "reported empty-results issue reproduction in the user Windows browser",
-    "real speech segmentation improvement rate"
+    "real speech segmentation improvement rate",
+    "waveform interaction in real Windows browser"
   ],
   "upstream_commit": "89f9d8fbd4d51ea019867ee1197725ede1df13c5",
   "windows_target": "Windows x64 / Python 3.11 / CUDA 12.8",
-  "windows_runtime_tested": false
+  "windows_runtime_tested": false,
+  "previous_full_suite_tests_passed": 65,
+  "current_test_scope": [
+    "tests/test_manual_split.py",
+    "tests/test_waveform.py",
+    "tests/test_client.py",
+    "tests/test_segmentation_accuracy.py",
+    "tests/test_names.py",
+    "tests/test_windows.py"
+  ],
+  "not_rerun_this_update": [
+    "tests/test_resume.py (PyTorch/torchdata unavailable in this test environment; trainer and state modules unchanged)"
+  ]
 }
