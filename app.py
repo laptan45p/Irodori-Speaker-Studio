@@ -4,6 +4,7 @@ import os
 import engine
 import gradio as gr
 from hf_access import check_access
+from portability import basename
 
 
 def settings(
@@ -40,6 +41,23 @@ def settings(
         checkpoint=checkpoint.strip(),
         initial_embedding=embedding.strip(),
     )
+
+
+def pick_model(current):
+    return pick_local_file("model", current)
+
+
+def pick_embedding(current):
+    return pick_local_file("embedding", current)
+
+
+def pick_local_file(kind, current):
+    from file_picker import choose_file
+    try:
+        selected = choose_file(kind, current)
+        return selected if selected is not None else gr.skip()
+    except Exception as error:
+        raise gr.Error(str(error)) from error
 
 
 def prepare_start(files, *args):
@@ -358,6 +376,14 @@ def refresh_results(job_id):
         return gr.skip(), gr.skip(), gr.skip(), str(exc), gr.skip()
 
 
+def project_sources(job_id):
+    """Display this project's retained originals, including after relocation."""
+    job = engine.resolve_job(job_id)
+    cfg = engine.read(job / "settings.json")
+    sources = [job / "input" / basename(path) for path in cfg.get("sources", [])]
+    return [str(path.resolve()) for path in sources if path.is_file()] or None
+
+
 def load_selected(selected, job_id):
     target = selected or job_id
     if not target:
@@ -418,10 +444,14 @@ def build():
                 lr = gr.Number(0.01, label="学習率")
                 batch = gr.Number(1, precision=0, label="バッチサイズ")
                 accumulation = gr.Number(1, precision=0, label="勾配蓄積回数")
-            checkpoint = gr.Textbox(
-                "", label="v4 Large model.safetensorsのパス（空欄なら自動取得）"
-            )
-            embedding = gr.Textbox("", label="追加学習する.speaker.safetensorsのパス（任意）")
+            with gr.Row():
+                checkpoint = gr.Textbox(
+                    "", label="v4 Large model.safetensorsのパス（空欄なら自動取得）", scale=5
+                )
+                select_model = gr.Button("モデルファイルを選択", scale=1)
+            with gr.Row():
+                embedding = gr.Textbox("", label="追加学習する.speaker.safetensorsのパス（任意）", scale=5)
+                select_embedding = gr.Button("話者埋め込みを選択", scale=1)
             gr.Markdown(
                 "BF16・Gradient Checkpointingを使用。バッチ1から開始できます。GPUメモリ不足時はログに表示されます。"
             )
@@ -562,6 +592,8 @@ def build():
         reload_button.click(
             load_selected, [saved_project, job_id], [job_id, table, clip, logs] + config_inputs,
             concurrency_id="work"
+        ).success(
+            project_sources, job_id, files, queue=False, show_progress="hidden",
         ).then(
             refresh_results, job_id, [table, clip, audio, logs, saved_project],
             queue=False, show_progress="minimal",
@@ -587,6 +619,8 @@ def build():
             queue=False, show_progress="hidden",
         )
         listen.click(preview, [job_id, clip], audio)
+        select_model.click(pick_model, checkpoint, checkpoint, queue=False, show_progress="minimal")
+        select_embedding.click(pick_embedding, embedding, embedding, queue=False, show_progress="minimal")
         for button, handler in [(previous_button, previous_clip), (next_button, next_clip)]:
             button.click(handler, [job_id, clip, table, wave_scope],
                          [clip, audio, wave_image, wave_info, source_audio],
@@ -596,6 +630,8 @@ def build():
         transfer_import.click(import_transfer, transfer_file,
                               [job_id, table, clip, logs] + config_inputs + [saved_project],
                               concurrency_id="work").success(
+            project_sources, job_id, files, queue=False, show_progress="hidden",
+        ).success(
             refresh_results, job_id, [table, clip, audio, logs, saved_project], queue=False,
         ).success(render_waveform, [job_id, clip, table, wave_scope],
                   [wave_image, wave_info, source_audio], queue=False)

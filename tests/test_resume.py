@@ -98,6 +98,62 @@ def test_changed_context_rejected(tmp_path, monkeypatch):
         )
 
 
+@pytest.mark.parametrize('nested', [False, True])
+def test_grown_rope_cache_restores_with_exact_cpu_continuation(tmp_path, monkeypatch, nested):
+    monkeypatch.setenv('STUDIO_CONTEXT', '{}')
+    model,opt,scheduler,loader=objects()
+    if nested:
+        model.reference_encoder=torch.nn.Module()
+    owner=model.reference_encoder if nested else model
+    owner.head_dim=4
+    cache=torch.polar(torch.ones(8,2),torch.arange(16).reshape(8,2).float())
+    owner.register_buffer('_freqs_cis_cache',cache,persistent=False)
+    iterator=iter(loader)
+    for _ in range(7):
+        update(model,opt,scheduler,next(iterator))
+    studio_state.save(tmp_path,model,opt,scheduler,7,Config(),Config(),
+                      {'rank_states':[loader.state_dict()],
+                       'studio_generator':loader.generator.get_state()}, {})
+    expected_batch=next(iterator)
+    expected_loss=update(model,opt,scheduler,expected_batch)
+    expected_weights={n:p.detach().clone() for n,p in model.named_parameters()}
+    resumed,opt2,scheduler2,loader2=objects(999)
+    if nested:
+        resumed.reference_encoder=torch.nn.Module()
+    resumed_owner=resumed.reference_encoder if nested else resumed
+    resumed_owner.head_dim=4
+    resumed_owner.register_buffer('_freqs_cis_cache',torch.empty(0,0,dtype=torch.complex64),persistent=False)
+    state=studio_state.restore(tmp_path/'resume_state.pt',resumed,opt2,scheduler2,Config(),Config())
+    assert state['step'] == 7
+    assert torch.equal(resumed_owner._freqs_cis_cache,cache)
+    assert '_freqs_cis_cache' in resumed_owner._non_persistent_buffers_set
+    loader2.load_state_dict(state['dataloader']['rank_states'][0])
+    iterator2=studio_state.restored_iterator(loader2,state)
+    actual_batch=next(iterator2)
+    assert torch.equal(actual_batch,expected_batch)
+    assert update(resumed,opt2,scheduler2,actual_batch) == expected_loss
+    assert all(torch.equal(p,expected_weights[n]) for n,p in resumed.named_parameters())
+    assert scheduler2.state_dict() == scheduler.state_dict()
+
+
+@pytest.mark.parametrize('name,persistent,head_dim', [
+    ('ordinary_cache',False,4), ('_freqs_cis_cache',True,4), ('_freqs_cis_cache',False,8),
+])
+def test_unrecognized_buffer_mismatch_still_rejected(tmp_path, monkeypatch,name,persistent,head_dim):
+    monkeypatch.setenv('STUDIO_CONTEXT', '{}')
+    model,opt,scheduler,loader=objects()
+    model.head_dim=4
+    model.register_buffer(name,torch.ones(8,2,dtype=torch.complex64),persistent=persistent)
+    studio_state.save(tmp_path,model,opt,scheduler,7,Config(),Config(),{}, {})
+    resumed,opt2,scheduler2,loader2=objects(999)
+    resumed.head_dim=head_dim
+    resumed.register_buffer(name,torch.empty(0,0,dtype=torch.complex64),persistent=persistent)
+    before=resumed.weight.detach().clone()
+    with pytest.raises(ValueError,match='バッファー'):
+        studio_state.restore(tmp_path/'resume_state.pt',resumed,opt2,scheduler2,Config(),Config())
+    assert torch.equal(before,resumed.weight)
+
+
 def test_atomic_failure_preserves_previous_state(tmp_path, monkeypatch):
     monkeypatch.setenv("STUDIO_CONTEXT", "{}")
     model, opt, scheduler, loader = objects()

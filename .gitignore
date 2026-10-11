@@ -28,3 +28,6 @@ __pycache__/
 *.log
 
 /pytest-of-root/
+
+# UI-generated audio and image cache
+/gradio/

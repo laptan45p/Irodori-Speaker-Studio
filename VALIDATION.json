@@ -1,6 +1,6 @@
 {
-  "tests_passed": 91,
-  "test_environment": "Python 3.12.14 / Gradio 5.50.0 / Linux",
+  "tests_passed": 114,
+  "test_environment": "Python 3.12.14 / Gradio 5.50.0 / PyTorch 2.10.0+cpu / torchdata 0.11.0 / Linux",
   "verified": [
     "sentence-priority segmentation",
     "word coverage",
@@ -89,7 +89,17 @@
     "previous/next clip navigation follows visible order including unchecked clips",
     "navigation retains unsaved table edits and committed rows",
     "navigation clamps ends and handles stale selection/empty project",
-    "Gradio navigation serializes selection, clip audio, waveform and source audio together"
+    "Gradio navigation serializes selection, clip audio, waveform and source audio together",
+    "root and nested nonpersistent RoPE cache resize restores saved complex contents",
+    "exact CPU optimizer/scheduler/RNG/StatefulDataLoader continuation after grown-cache restore",
+    "persistent, unrecognized and wrong-width buffer mismatches remain rejected before parameter mutation",
+    "recognized legacy resume extension upgrade preserves immutable state context and rejects other identity changes",
+    "model and embedding picker callbacks update their matching textboxes via Gradio process_api",
+    "native Windows picker subprocess JSON path routing, Unicode, cancellation and validation (mocked)",
+    "picker passes original local paths without copying or uploading model bytes",
+    "saved-project open and transfer import restore retained original audio into top file component",
+    "relocated Windows input paths resolve within current project; missing originals omitted",
+    "Gradio source file response serialization preserves original audio bytes"
   ],
   "not_verified": [
     "real GPU model download and installation",
@@ -106,7 +116,8 @@
     "waveform interaction in real Windows browser",
     "actual training resume across different PCs or GPUs",
     "live authenticated Hugging Face access check on Windows",
-    "boundary improvement on actual audio shown in screenshots (audio not supplied)"
+    "boundary improvement on actual audio shown in screenshots (audio not supplied)",
+    "actual Windows Forms file selection dialog on user PC"
   ],
   "upstream_commit": "89f9d8fbd4d51ea019867ee1197725ede1df13c5",
   "windows_target": "Windows x64 / Python 3.11 / CUDA 12.8",
@@ -121,9 +132,9 @@
     "tests/test_client.py",
     "tests/test_segmentation_accuracy.py",
     "tests/test_names.py",
-    "tests/test_windows.py"
+    "tests/test_windows.py",
+    "tests/test_resume.py",
+    "tests/test_file_picker.py"
   ],
-  "not_rerun_this_update": [
-    "tests/test_resume.py (PyTorch/torchdata unavailable in this test environment; trainer and state modules unchanged)"
-  ]
+  "not_rerun_this_update": []
 }

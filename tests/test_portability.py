@@ -15,6 +15,22 @@ from portability import output_path, resume_command, verify_context
 material = _material_fixture
 
 
+def test_known_legacy_extension_upgrade_keeps_other_identity_checks():
+    import hashlib
+
+    from portability import LEGACY_RESUME_EXTENSION
+    installed=Path(__file__).resolve().parents[1]/'irodori/studio_state.py'
+    current={'extension_sha256':hashlib.sha256(installed.read_bytes()).hexdigest(),
+             'base_sha256':'same', 'gpu':'same', 'cuda':'same'}
+    legacy=dict(current,extension_sha256=LEGACY_RESUME_EXTENSION)
+    saved={'context':legacy}
+    assert not verify_context(saved,current)
+    assert saved['context'] == legacy
+    for bad in [dict(current,base_sha256='changed'),dict(current,extension_sha256='unknown')]:
+        with pytest.raises(ValueError,match='変更'):
+            verify_context(saved,bad)
+
+
 def record(job):
     output = job / "output/abcdef123456"
     output.mkdir()

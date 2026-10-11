@@ -527,3 +527,41 @@ def test_no_saved_projects_has_empty_selection_and_id(tmp_path, monkeypatch):
     saved = next(p for p in props if p.get('label', '').startswith('保存済みプロジェクト'))
     identity = next(p for p in props if p.get('label', '').startswith('プロジェクトID'))
     assert saved.get('value') is None and identity['value'] == ''
+
+
+def test_project_sources_use_retained_originals_after_relocation(job):
+    import app
+    identity, folder = job
+    original = folder / 'input/000_original.wav'
+    before = original.read_bytes()
+    engine.write(folder / 'settings.json', {
+        'sources': [r'F:\old\projects\old-id\input\000_original.wav',
+                    r'F:\old\input\001_missing.wav'],
+    })
+    assert app.project_sources(identity) == [str(original.resolve())]
+    assert original.read_bytes() == before
+    original.unlink()
+    assert app.project_sources(identity) is None
+
+
+def test_open_and_import_update_source_upload_component(job):
+    import asyncio
+
+    import app
+    identity, folder = job
+    demo = app.build()
+    index = next(i for i, fn in demo.fns.items() if fn.fn is app.project_sources)
+    result = asyncio.run(demo.process_api(index, [identity]))
+    item = result['data'][0][0]
+    assert item['orig_name'] == '000_original.wav'
+    assert Path(item['path']).read_bytes() == (folder / 'input/000_original.wav').read_bytes()
+    config = demo.get_config_file()
+    dependencies = config['dependencies']
+    for callback in ('load_selected', 'import_transfer'):
+        opening = next(d for d in dependencies if d['api_name'] == callback)
+        restored = next(d for d in dependencies
+                        if d['api_name'].startswith('project_sources')
+                        and d['trigger_after'] == opening['id'])
+        assert restored['trigger_only_on_success']
+        component = next(c for c in config['components'] if c['id'] == restored['outputs'][0])
+        assert component['props']['label'] == '音声ファイル（複数選択）'

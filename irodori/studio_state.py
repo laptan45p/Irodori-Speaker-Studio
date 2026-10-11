@@ -69,14 +69,36 @@ def restore(path,model,optimizer,scheduler,model_cfg,train_cfg):
     expected={n for n,p in parameters.items() if p.requires_grad}
     if expected != set(state['trainable']):
         raise ValueError('学習対象パラメーターが異なります。')
+    buffers=dict(model.named_buffers())
+    resized={}
+    for name,value in state['buffers'].items():
+        current=buffers.get(name)
+        if current is None:
+            raise ValueError(f'モデルバッファーがありません: {name}')
+        if current.shape != value.shape:
+            parent,_,leaf=name.rpartition('.')
+            owner=model.get_submodule(parent) if parent else model
+            # Irodori's nonpersistent RoPE cache grows with sequence length.
+            # Restore its saved contents; do not relax checks for other buffers.
+            if (leaf == '_freqs_cis_cache'
+                    and leaf in owner._non_persistent_buffers_set
+                    and current.dtype == value.dtype == torch.complex64
+                    and value.ndim == 2
+                    and hasattr(owner,'head_dim')
+                    and value.shape[1] == owner.head_dim // 2):
+                resized[name]=(owner,leaf)
+            else:
+                raise ValueError(f'モデルバッファーの構成が異なります: {name} '
+                                 f'保存={tuple(value.shape)} / 現在={tuple(current.shape)}')
     with torch.no_grad():
         for name,value in state['trainable'].items():
             parameters[name].copy_(value)
-        buffers=dict(model.named_buffers())
         for name,value in state['buffers'].items():
-            if name not in buffers or buffers[name].shape != value.shape:
-                raise ValueError('モデルバッファーの構成が異なります。')
-            buffers[name].copy_(value)
+            if name in resized:
+                owner,leaf=resized[name]
+                setattr(owner,leaf,value.to(device=buffers[name].device).clone())
+            else:
+                buffers[name].copy_(value)
     optimizer.load_state_dict(state['optimizer'])
     if scheduler is not None:
         scheduler.load_state_dict(state['scheduler'])
