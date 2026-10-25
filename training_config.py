@@ -1,18 +1,25 @@
-"""Build a Large Speaker Inversion configuration without changing base architecture."""
+"""Build Speaker Inversion configurations without changing base architecture."""
 
 import json
 
+from model_profiles import DEFAULT_MODEL, model_profile
 
-def make_config(metadata, allowed_model_keys, defaults, records, cfg, max_text):
+
+def checkpoint_model(metadata, allowed_model_keys, variant=DEFAULT_MODEL):
+    profile = model_profile(variant)
     model = json.loads(metadata.get("config_json", "{}"))
     model = {k: v for k, v in model.items() if k in allowed_model_keys}
-    if (
-        model.get("model_dim") != 2048
-        or model.get("num_layers") != 24
-        or model.get("latent_dim") != 32
-        or model.get("text_tokenizer_repo") != "google/t5gemma-2-1b-1b"
-    ):
-        raise ValueError("指定モデルはv4 Largeの構成ではありません。")
+    expected = {k: profile[k] for k in ("model_dim", "num_layers", "text_tokenizer_repo")}
+    expected["latent_dim"] = 32
+    if any(model.get(key) != value for key, value in expected.items()):
+        raise ValueError(f"指定モデルは{variant}の構成ではありません。学習モデルの選択とパスを確認してください。")
+    if model.get("use_speaker_condition") is False:
+        raise ValueError("話者条件を使用しないモデルではSpeaker Inversionを学習できません。")
+    return model
+
+
+def make_config(metadata, allowed_model_keys, defaults, records, cfg, max_text):
+    model = checkpoint_model(metadata, allowed_model_keys, cfg.get("model_variant", DEFAULT_MODEL))
     if not records or any(r["num_frames"] <= 0 or not r["text"].strip() for r in records):
         raise ValueError("学習マニフェストが空または不正です。")
     train = dict(defaults)

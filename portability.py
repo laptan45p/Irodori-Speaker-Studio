@@ -1,6 +1,8 @@
 """Relocate project paths without modifying hashed training data or state."""
 from pathlib import Path
 
+from model_profiles import DEFAULT_MODEL, model_profile
+
 LEGACY_RESUME_EXTENSION = "7b290557a8f7eb7076f65c0d2b0af43410afb63493e4c669215a0b24e71de8a0"
 
 
@@ -15,13 +17,17 @@ def output_path(job, record):
     return Path(job) / "output" / name
 
 
+def training_config_path(job, record):
+    return Path(job) / model_profile(record.get("model_variant", DEFAULT_MODEL))["config_file"]
+
+
 def resume_command(record, job, checkpoint, root, upstream, python):
     command = list(record["command"])
     if len(command) < 3 or command[1] != "-u":
         raise ValueError("保存済み学習コマンドの形式が不正です。")
     command[0], command[2] = str(python), str(Path(upstream) / "train.py")
     for flag, value in {
-        "--config": Path(job) / "train_large_speaker.yaml",
+        "--config": training_config_path(job, record),
         "--manifest": Path(job) / "manifest.jsonl",
         "--init-checkpoint": checkpoint,
         "--output-dir": output_path(job, record),

@@ -1,9 +1,11 @@
 import argparse
 import os
 
-import engine
 import gradio as gr
+
+import engine
 from hf_access import check_access
+from model_profiles import DEFAULT_MODEL, MODEL_PROFILES, model_profile
 from portability import basename
 
 
@@ -21,13 +23,16 @@ def settings(
     checkpoint,
     embedding,
     project_name="",
+    model_variant=DEFAULT_MODEL,
 ):
+    model_profile(model_variant)
     if not 0 < minimum <= maximum:
         raise gr.Error("秒数の目安は 0 < 最小 <= 最大 にしてください。")
     if steps < 1 or lr <= 0 or batch < 1 or accumulation < 1:
         raise gr.Error("学習設定は正の値にしてください。")
     return dict(
         project_name=engine.validate_name(project_name),
+        model_variant=model_variant,
         minimum=float(minimum),
         maximum=float(maximum),
         asr_model=asr_model,
@@ -340,6 +345,7 @@ def load(job_id):
                 ]
             ],
             engine.project_name(engine.resolve_job(job_id)),
+            cfg.get("model_variant", DEFAULT_MODEL),
         )
     except Exception as exc:
         raise gr.Error(str(exc))
@@ -402,15 +408,13 @@ def import_transfer(archive):
 def build():
     with gr.Blocks(title="Irodori Speaker Studio") as demo:
         gr.Markdown(
-            "# Irodori Speaker Studio\n複数音声 → 文脈を優先して分割 → 話者埋め込みを学習（v4 Large）"
+            "# Irodori Speaker Studio\n複数音声 → 文脈を優先して分割 → 話者埋め込みを学習（v4 Large / v4.1 Small）"
         )
         gr.Markdown(
             "5〜10秒は目安です。長い文や独立した短い発話も保持します。音声は同じ話者の素材をまとめてください。"
         )
         auth_status = gr.Markdown("Hugging Faceの認証・モデルアクセスを確認中…")
         auth_refresh = gr.Button("認証状態を再確認", size="sm")
-        demo.load(check_access, outputs=auth_status, queue=False, show_progress="hidden")
-        auth_refresh.click(check_access, outputs=auth_status, queue=False, show_progress="minimal")
         project_name = gr.Textbox(label="プロジェクト名（任意・日本語可）", placeholder="例：みあ")
         with gr.Row():
             files = gr.File(
@@ -437,7 +441,9 @@ def build():
                 )
                 asr_device = gr.Radio(["cpu", "cuda"], value="cpu", label="文字起こし実行先")
                 language = gr.Textbox("ja", label="言語（日本語: ja / 空欄: 自動）")
-        with gr.Accordion("v4 Large Speaker Inversion設定", open=True):
+        with gr.Accordion("Speaker Inversion設定", open=True):
+            model_variant = gr.Dropdown(list(MODEL_PROFILES), value=DEFAULT_MODEL, label="学習モデル")
+            gr.Markdown("Smallはv4.1を使用します。追加学習・推論には学習時と同じ基盤モデルを使ってください。LargeとSmallの話者埋め込みは相互利用できません。")
             caption = gr.Textbox("", label="声・スタイルの説明（任意）")
             with gr.Row():
                 steps = gr.Number(3000, precision=0, label="学習ステップ数")
@@ -446,7 +452,7 @@ def build():
                 accumulation = gr.Number(1, precision=0, label="勾配蓄積回数")
             with gr.Row():
                 checkpoint = gr.Textbox(
-                    "", label="v4 Large model.safetensorsのパス（空欄なら自動取得）", scale=5
+                    "", label="選択モデルのmodel.safetensorsのパス（空欄なら自動取得）", scale=5
                 )
                 select_model = gr.Button("モデルファイルを選択", scale=1)
             with gr.Row():
@@ -469,7 +475,11 @@ def build():
             checkpoint,
             embedding,
             project_name,
+            model_variant,
         ]
+        demo.load(check_access, inputs=model_variant, outputs=auth_status, queue=False, show_progress="hidden")
+        auth_refresh.click(check_access, model_variant, auth_status, queue=False, show_progress="minimal")
+        model_variant.change(check_access, model_variant, auth_status, queue=False, show_progress="minimal")
         project_choices = engine.project_choices()
         initial_project = project_choices[0][1] if project_choices else None
         with gr.Row():
@@ -540,7 +550,7 @@ def build():
             transfer_export = gr.Button("PC移行用ZIPを取得（元音声・素材・学習状態）")
             transfer_file = gr.File(label="移行用ZIP", file_types=[".zip"], type="filepath")
             transfer_import = gr.Button("移行用ZIPを読み込む")
-            migration_checkpoint = gr.Textbox(label="移行先のv4 Largeモデルのパス（任意）")
+            migration_checkpoint = gr.Textbox(label="移行先の基盤モデルのパス（学習時と同じモデル・任意）")
             allow_environment_change = gr.Checkbox(label="移行先のGPU・CUDAの違いを許可して再開", value=False)
         saved_project.input(lambda value: value, saved_project, job_id, queue=False)
         refresh_projects.click(

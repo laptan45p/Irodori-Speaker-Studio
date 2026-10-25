@@ -73,7 +73,7 @@ def test_rebased_command_and_hardware_permission(material):
     _, job, _, _ = material
     saved = record(job)
     command = resume_command(saved, job, "/new/model.safetensors", "/new", "/new/irodori", "/new/python")
-    assert command[0] == "/new/python" and command[2] == "/new/irodori/train.py"
+    assert command[0] == "/new/python" and command[2] == str(Path("/new/irodori/train.py"))
     assert command[command.index("--manifest")+1] == str(job / "manifest.jsonl")
     assert command[command.index("--output-dir")+1] == str(job / "output/abcdef123456")
     current = dict(saved["context"], gpu="new GPU", cuda="13.0")
