@@ -469,6 +469,7 @@ def bundle(job_id, portable=False):
             "warnings.json",
             "manifest.jsonl",
             "train_large_speaker.yaml",
+            "train_small_speaker.yaml",
             "provenance.json",
             "training.json",
             "run.log",

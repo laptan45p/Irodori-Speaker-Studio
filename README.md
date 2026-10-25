@@ -1,7 +1,7 @@
 # Irodori Speaker Studio
 
 複数の音声ファイルを読み込み、文字起こし・文脈に沿った分割・DACVAE変換・
-Irodori-TTS **v4 Large** のSpeaker Inversion学習まで実行する日本語GUIクライアントです。
+Irodori-TTS **v4 Large / v4.1 Small** のSpeaker Inversion学習まで実行する日本語GUIクライアントです。
 Pythonソース版です。Windowsのコマンドプロンプトで直接起動できます。WSL2は不要です。
 Linux/RunPodの起動にも引き続き対応します。
 
@@ -16,7 +16,7 @@ Linux/RunPodの起動にも引き続き対応します。
 - 秒数外の素材も自動的に学習対象に含めます。「使用」をOFFにして個別除外可能。
 - 音声を試聴し、開始/終了秒と文字起こしを編集可能。
 - 「分割して確認」「分割から学習まで一括実行」の2モード。
-- v4 Largeの非量子化モデルを初回に取得。ローカルモデル指定も可能。
+- 学習モデルをv4-Large / v4.1-Smallから選択し、非量子化モデルを初回に取得。ローカルモデル指定も可能。
 - 公式DACVAEの正規化（-16dB）と決定的エンコードを使用。
 - モデル本体を固定し、16個の話者埋め込みトークンだけを学習。
 - 途中停止、保存プロジェクト再読込、保存済み話者埋め込みからの追加学習。
@@ -142,9 +142,17 @@ CPUでのlarge-v3文字起こしには時間がかかります。速度優先な
 Whisper CUDA実行にはCUDA 12のcuBLASとcuDNN 9が必要です。
 GPU文字起こしのライブラリーエラーが出る場合はCPUを選択できます。
 
-「v4 Largeモデルのパス」は**実行しているPC上のパス**です。
-空欄なら `Aratako/Irodori-TTS-v4-Large` の `model.safetensors` を取得します。
-量子化モデルやSmallモデルは学習には使用できません。
+「学習モデル」で `v4-Large` または `v4.1-Small` を選びます（初期値はLarge）。
+「選択モデルのmodel.safetensorsのパス」は**実行しているPC上のパス**です。
+空欄なら選択に応じて `Aratako/Irodori-TTS-v4-Large` または
+`Aratako/Irodori-TTS-v4.1-Small` の `model.safetensors` を取得します。
+量子化モデルは学習には使用できません。ローカルモデルは選択したモデルと構成が一致する必要があります。
+
+Smallでも同じ素材の分割・修正、Speaker Inversionの新規学習・追加学習、保存して中断・再開、
+別PCへの移行を利用できます。モデル選択はプロジェクトと学習記録に保存されます。
+既存のモデル選択がないプロジェクトはLargeとして扱います。
+追加学習用の埋め込みと推論時の基盤モデルは、学習時と同じものを使用してください。
+LargeとSmallの話者埋め込みは相互利用できません。SmallでもCUDA・BF16対応GPUが必要です。
 
 ## 分割の考え方
 
@@ -185,7 +193,7 @@ projects/<ID>/
   rows.json          境界・文字起こし・採否
   latents/           DACVAE潜在表現
   manifest.jsonl     公式train.py用入力
-  train_large_speaker.yaml
+  train_large_speaker.yaml  # Smallではtrain_small_speaker.yaml
   output/<実行ID>/   学習済み話者埋め込み
   training.json      最新の学習出力先と基盤モデル
   provenance.json    学習条件と公式コードのバージョン
@@ -244,12 +252,12 @@ CUDAの非決定的な演算があるため、保存状態を復元してもGPU�
 ## 学習した声を使う
 
 ZIP内の `output/<実行ID>/checkpoint_final.speaker.safetensors` が話者埋め込みです。
-学習に使用した同じv4 Large基盤モデルと組み合わせて使います。
+学習に使用した同じ基盤モデル（Large / Small）と組み合わせて使います。
 `training.json`にその基盤モデルのパスを記録しています。
 
 ```bash
 irodori/.venv/bin/python irodori/infer.py \
-  --checkpoint <学習で使用したv4-Largeのmodel.safetensors> \
+  --checkpoint <学習で使用したmodel.safetensors> \
   --ref-embed <checkpoint_final.speaker.safetensorsのパス> \
   --text 'こんにちは。学習した声のテストです。' \
   --output-wav sample.wav
@@ -264,11 +272,12 @@ irodori/.venv/bin/python irodori/infer.py \
 - 公式: https://github.com/Aratako/Irodori-TTS
 - コミット: `89f9d8fbd4d51ea019867ee1197725ede1df13c5`
 - 基盤モデル: https://huggingface.co/Aratako/Irodori-TTS-v4-Large
+- Small基盤モデル: https://huggingface.co/Aratako/Irodori-TTS-v4.1-Small
 - 文字起こし: https://github.com/SYSTRAN/faster-whisper
 
 v4 Large専用のSpeaker Inversion YAMLがこの公式版にはないため、
-公式Speaker Inversion設定の学習セクションを使い、**モデル構造はLargeチェックポイントの
-config_jsonメタデータから取得**します。Smallのモデル寸法は流用しません。
+公式Speaker Inversion設定の学習セクションを使い、**モデル構造は選択したチェックポイントの
+config_jsonメタデータから取得**します。Large・Smallそれぞれのモデル寸法を保持します。
 チェックポイントに含まれるduration predictorの構造も保持します。
 
 文脈を優先した長い素材が公式Datasetの長さ制限で切り捨てられないよう、
@@ -405,10 +414,10 @@ Windowsのファイル名に使えない文字（`\ / : * ? " < > |`）、予約
 2. 「別PCへの移行・移行先での再開」を開き、「PC移行用ZIPを取得」でZIPを保存します。
 3. 移行先にアプリを展開し、通常のWindowsセットアップを実行します。移行用ZIPを選び、「移行用ZIPを読み込む」を押します。別のプロジェクトIDで登録され、移行先の既存プロジェクトは上書きされません。
 4. 素材の試聴・文字起こし修正・波形編集は、読み込み後にそのまま利用できます。
-5. 学習を再開する場合は、必要に応じて移行先のv4 Largeの `model.safetensors` のパスを指定します。空欄なら保存されたパスを確認し、見つからない場合にモデルを取得します。GPU・CUDAが変わった場合は「移行先のGPU・CUDAの違いを許可して再開」にチェックし、「保存状態から再開」を押します。
+5. 学習を再開する場合は、必要に応じて移行先の同じ基盤モデルの `model.safetensors` のパスを指定します。空欄なら保存されたパスを確認し、見つからない場合は学習記録に保存されたモデル（Large / Small）を取得します。GPU・CUDAが変わった場合は「移行先のGPU・CUDAの違いを許可して再開」にチェックし、「保存状態から再開」を押します。
 
 移行用ZIPには元音声、修正済みWAV、文字起こし、潜在表現、学習出力、
-再開状態、利用可能な初期埋め込みを含めます。大容量のv4 Largeモデルや
+再開状態、利用可能な初期埋め込みを含めます。大容量の基盤モデルや
 Python環境は含めません。通常の結果ZIPは移行用ではありません。
 
 保存状態からの再開では、ステップ数・オプティマイザー・スケジューラー・
@@ -424,10 +433,12 @@ PyTorchのバージョンとCUDAデバイス数は元PCと一致する必要が�
 
 ### 起動時のHugging Face認証確認
 
-画面を開くと、Hugging Faceの保存済み認証情報と、v4 Largeが使用する
+Largeを選択した状態で画面を開くと、Hugging Faceの保存済み認証情報と、v4 Largeが使用する
 `google/t5gemma-2-1b-1b` の設定ファイルへのアクセスを確認します。
 未ログイン・権限不足・通信による確認失敗は区別して表示します。
 モデル本体はこの確認ではダウンロードしません。
+Smallを選択した場合は公開ModernBERTの設定ファイルへのアクセスを確認します。
+SmallのためにLarge用T5Gemmaのアクセス承認を取得する必要はありません。
 未認証でも音声分割・素材修正を利用できます。キャッシュ済みのモデルを
 利用できる場合もあるため、認証確認だけで学習を禁止することはありません。
 
@@ -486,7 +497,7 @@ Whisperの終了時刻から最大0.8秒後まで、より低い音量閾値で
 
 ### モデル・追加学習用埋め込みのファイル選択
 
-Windowsのローカル起動では、v4 Largeモデルのパス欄の横にある
+Windowsのローカル起動では、基盤モデルのパス欄の横にある
 「モデルファイルを選択」、追加学習欄の「話者埋め込みを選択」から
 Windowsのファイル選択ダイアログを開けます。選択した元ファイルの
 フルパスを入力するだけで、モデル本体のアップロード・コピーはしません。

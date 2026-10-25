@@ -24,7 +24,7 @@ try {
         $dialog.Title = '追加学習する話者埋め込みを選択'
         $dialog.Filter = '話者埋め込み (*.speaker.safetensors)|*.speaker.safetensors'
     } else {
-        $dialog.Title = 'v4 Large model.safetensorsを選択'
+        $dialog.Title = '学習モデルのmodel.safetensorsを選択'
         $dialog.Filter = 'モデル (*.safetensors)|*.safetensors'
     }
     $dialog.InitialDirectory = $request.initial_directory

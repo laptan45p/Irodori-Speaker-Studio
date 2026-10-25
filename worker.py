@@ -12,6 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 UPSTREAM = ROOT / "irodori"
 sys.path.insert(0, str(UPSTREAM))
+from model_profiles import DEFAULT_MODEL, model_profile
 from segmentation import Word, acoustic_bounds, segment_words
 
 
@@ -145,34 +146,35 @@ def train(job):
     cfg = read_json(job / "settings.json")
     if not torch.cuda.is_available() or not torch.cuda.is_bf16_supported():
         raise RuntimeError("CUDAとBF16対応GPUが必要です。")
+    variant = cfg.get("model_variant", DEFAULT_MODEL)
+    profile = model_profile(variant)
     checkpoint = cfg.get("checkpoint", "").strip()
     if checkpoint:
         checkpoint = str(Path(checkpoint).expanduser().resolve())
         if not Path(checkpoint).is_file() or Path(checkpoint).suffix != ".safetensors":
-            raise ValueError("v4 Largeの非量子化model.safetensorsを指定してください。")
+            raise ValueError(f"{variant}の非量子化model.safetensorsを指定してください。")
     else:
-        print("v4 Largeをダウンロードします（初回のみ・大容量）", flush=True)
+        print(f"{variant}をダウンロードします（初回のみ・大容量）", flush=True)
         directory = snapshot_download(
-            "Aratako/Irodori-TTS-v4-Large",
+            profile["repo"],
             allow_patterns=["*.json", "*.safetensors", "tokenizer/*", "*.model"],
         )
         checkpoint = str(Path(directory) / "model.safetensors")
-    # Follow checkpoint metadata, including its duration architecture; do not reuse Small dimensions.
+    # Preserve the selected checkpoint's architecture, including its duration predictor.
     with safe_open(checkpoint, framework="pt", device="cpu") as f:
         metadata = f.metadata() or {}
     from irodori_tts.quantization import parse_quantization_metadata
 
     if parse_quantization_metadata(metadata) is not None:
         raise ValueError("量子化モデルは学習には使用できません。")
-    model = json.loads(metadata.get("config_json", "{}"))
     valid_keys = {field.name for field in dataclasses.fields(ModelConfig)}
-    model = {k: v for k, v in model.items() if k in valid_keys}
-    if model.get("model_dim") != 2048 or model.get("num_layers") != 24:
-        raise ValueError("指定モデルはv4 Largeの構成ではありません。")
+    from training_config import checkpoint_model, make_config
+
+    model = checkpoint_model(metadata, valid_keys, variant)
     train_cfg = yaml.safe_load(
-        (UPSTREAM / "configs/train_v4_small_speaker_inversion.yaml").read_text()
+        (UPSTREAM / "configs/train_v4_small_speaker_inversion.yaml").read_text(encoding="utf-8")
     )["train"]
-    records = [json.loads(line) for line in (job / "manifest.jsonl").read_text().splitlines()]
+    records = [json.loads(line) for line in (job / "manifest.jsonl").read_text(encoding="utf-8").splitlines()]
     # Retain context-priority long clips: raise frame and text limits instead of cropping.
     from irodori_tts.tokenizer import PretrainedTextTokenizer
 
@@ -182,19 +184,19 @@ def train(job):
         revision=model.get("text_encoder_revision"),
     )
     max_text = max(len(tokenizer.encode(r["text"])) for r in records)
-    from training_config import make_config
-
     generated = make_config(metadata, valid_keys, train_cfg, records, cfg, max_text)
     train_cfg = generated["train"]
     output_dir = job / "output" / uuid.uuid4().hex[:12]
     output_dir.mkdir(parents=True)
-    write_json(job / "training.json", {"output_dir": str(output_dir), "checkpoint": checkpoint})
-    run_config = job / "train_large_speaker.yaml"
+    write_json(job / "training.json", {"output_dir": str(output_dir), "checkpoint": checkpoint,
+                                      "model_variant": variant})
+    run_config = job / profile["config_file"]
     run_config.write_text(yaml.safe_dump(generated, sort_keys=False), encoding="utf-8")
     write_json(
         job / "provenance.json",
         {
-            "model_repo": "Aratako/Irodori-TTS-v4-Large",
+            "model_repo": profile["repo"],
+            "model_variant": variant,
             "checkpoint": checkpoint,
             "upstream_commit": "89f9d8fbd4d51ea019867ee1197725ede1df13c5",
             "samples": len(records),
@@ -233,6 +235,8 @@ def training_identity(job, checkpoint):
     import studio_state
     import torch
 
+    from portability import training_config_path
+
     records = [
         json.loads(line)
         for line in (job / "manifest.jsonl").read_text(encoding="utf-8").splitlines()
@@ -249,7 +253,7 @@ def training_identity(job, checkpoint):
             )
             for r in records
         },
-        "config_sha256": studio_state.digest(job / "train_large_speaker.yaml"),
+        "config_sha256": studio_state.digest(training_config_path(job, read_json(job / "training.json"))),
         "trainer_sha256": studio_state.digest(UPSTREAM / "train.py"),
         "extension_sha256": studio_state.digest(UPSTREAM / "studio_state.py"),
         "gpu": torch.cuda.get_device_name(0),
@@ -284,8 +288,9 @@ def resume(job):
         if request.get("checkpoint", "").strip():
             raise ValueError("移行先モデルのパスが見つかりません。")
         from huggingface_hub import snapshot_download
-        print("移行先でv4 Largeを取得します（キャッシュがあれば再利用）", flush=True)
-        checkpoint = str(Path(snapshot_download("Aratako/Irodori-TTS-v4-Large",
+        variant = record.get("model_variant", DEFAULT_MODEL)
+        print(f"移行先で{variant}を取得します（キャッシュがあれば再利用）", flush=True)
+        checkpoint = str(Path(snapshot_download(model_profile(variant)["repo"],
                         allow_patterns=["model.safetensors"])) / "model.safetensors")
     context = training_identity(job, checkpoint)
     changed = verify_context(record, context, request.get("allow_environment_change", False))

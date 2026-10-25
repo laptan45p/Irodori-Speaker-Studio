@@ -14,12 +14,12 @@ import worker
 
 def test_windows_venv_paths_and_commands():
     root = Path("/folder with spaces/client")
-    assert str(setup_client.environment_python(root / "irodori", True)).endswith(
+    assert setup_client.environment_python(root / "irodori", True).as_posix().endswith(
         "Scripts/python.exe"
     )
     commands = setup_client.setup_commands(["uv.exe"], root, True)
     assert commands[0][0] == ["uv.exe", "sync", "--frozen", "--extra", "cu128", "--python", "3.11"]
-    assert "Scripts/python.exe" in commands[1][0][4]
+    assert "Scripts/python.exe" in Path(commands[1][0][4]).as_posix()
     assert commands[2][0][-1] == "--setup-check"
     assert commands[0][1] == root / "irodori"
 

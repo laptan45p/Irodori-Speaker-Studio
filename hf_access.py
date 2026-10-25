@@ -2,6 +2,8 @@
 import sys
 from pathlib import Path
 
+from model_profiles import DEFAULT_MODEL, model_profile
+
 REPO = "google/t5gemma-2-1b-1b"
 REVISION = "dd0a2683227859151b1730ca3a63087df5b5f39b"
 
@@ -31,7 +33,16 @@ def login_help():
     )
 
 
-def check_access():
+def check_access(model_variant=DEFAULT_MODEL):
+    profile = model_profile(model_variant)
+    if model_variant != DEFAULT_MODEL:
+        # Small's ModernBERT is public. Do not block it on Large's gated T5Gemma.
+        try:
+            from huggingface_hub import get_hf_file_metadata, hf_hub_url
+            get_hf_file_metadata(hf_hub_url(profile["text_tokenizer_repo"], "config.json"), timeout=5)
+            return "✅ Hugging Face：Smallが使用するModernBERTへのアクセスを確認しました。"
+        except Exception:
+            return "⚠️ Hugging Face：SmallのModernBERTへのアクセスを確認できませんでした。接続を確認してください。キャッシュ済みのモデルは使用できます。"
     try:
         from huggingface_hub import get_hf_file_metadata, get_token, hf_hub_url
         token = get_token()
